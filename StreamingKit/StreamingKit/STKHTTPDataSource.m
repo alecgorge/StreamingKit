@@ -35,6 +35,8 @@
 #import "STKHTTPDataSource.h"
 #import "STKLocalFileDataSource.h"
 
+static NSString *userAgent = nil;
+
 @interface STKHTTPDataSource()
 {
 @private
@@ -55,6 +57,11 @@
 @end
 
 @implementation STKHTTPDataSource
+
++ (void)setDefaultUserAgent:(NSString *)str
+{
+	userAgent = str;
+}
 
 -(id) initWithURL:(NSURL*)urlIn
 {
@@ -291,7 +298,11 @@
         }
 
         CFHTTPMessageRef message = CFHTTPMessageCreateRequest(NULL, (CFStringRef)@"GET", (__bridge CFURLRef)self->currentUrl, kCFHTTPVersion1_1);
-
+		
+		if(userAgent) {
+			CFHTTPMessageSetHeaderFieldValue(message, CFSTR("User-Agent"), (__bridge CFStringRef)userAgent);
+		}
+		
         if (seekStart > 0)
         {
             CFHTTPMessageSetHeaderFieldValue(message, CFSTR("Range"), (__bridge CFStringRef)[NSString stringWithFormat:@"bytes=%lld-", seekStart]);
