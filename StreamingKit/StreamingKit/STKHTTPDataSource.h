@@ -42,6 +42,8 @@ typedef void(^STKAsyncURLProvider)(STKHTTPDataSource* dataSource, BOOL forSeek, 
 
 @interface STKHTTPDataSource : STKCoreFoundationDataSource
 
++ (void)setDefaultUserAgent:(NSString *)defaultUserAgent;
+
 @property (readonly, retain) NSURL* url;
 @property (readonly) UInt32 httpStatusCode;
 
