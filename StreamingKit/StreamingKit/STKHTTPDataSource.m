@@ -41,6 +41,14 @@ static NSString *userAgent = nil;
 {
 @private
     UInt32 httpStatusCode;
+    
+    NSInteger shoutcastMetadataInterval;
+    NSInteger shoutcastMetadataBytesRead;
+    
+    char *metadataHeader;
+    NSInteger metadataLength;
+    NSInteger metadataHeaderIndex;
+    
     SInt64 seekStart;
     SInt64 relativePosition;
     SInt64 fileLength;
@@ -96,7 +104,7 @@ static NSString *userAgent = nil;
 
 -(void) dealloc
 {
-    NSLog(@"STKHTTPDataSource dealloc");
+    free(metadataHeader);
 }
 
 -(NSURL*) url
@@ -154,7 +162,60 @@ static NSString *userAgent = nil;
     
 	if (self.httpStatusCode == 0)
 	{
-		CFTypeRef response = CFReadStreamCopyProperty(stream, kCFStreamPropertyHTTPResponseHeader);
+        CFTypeRef response = CFReadStreamCopyProperty(stream, kCFStreamPropertyHTTPResponseHeader);
+        
+        NSString *statusLine = (__bridge NSString *)CFHTTPMessageCopyResponseStatusLine(response);
+        
+        // if the status line is empty, the response was wonky--"ICY 200 OK" kinda wonky perhaps!
+        if(statusLine.length == 0)
+        {
+            static NSInteger httpConnectionBufferSize = 1024;
+            static char *http = "HTTP/1.1 200 OK";
+            static NSInteger icy200OkLength = 10;
+     
+            /* If the response has the "ICY 200 OK" string,
+             * we are dealing with the ShoutCast protocol.
+             * The HTTP headers won't be available.
+             */
+            UInt8 *httpReadBuffer = malloc(sizeof(UInt8) * httpConnectionBufferSize);
+            CFIndex bytesRead = CFReadStreamRead(stream, httpReadBuffer, httpConnectionBufferSize);
+            if (bytesRead >= 10 &&
+                httpReadBuffer[0] == 0x49 && httpReadBuffer[1] == 0x43 && httpReadBuffer[2] == 0x59 &&
+                httpReadBuffer[3] == 0x20 && httpReadBuffer[4] == 0x32 && httpReadBuffer[5] == 0x30 &&
+                httpReadBuffer[6] == 0x30 && httpReadBuffer[7] == 0x20 && httpReadBuffer[8] == 0x4F &&
+                httpReadBuffer[9] == 0x4B)
+            {
+                _isShoutCastStream = YES;
+                
+                response = CFHTTPMessageCreateEmpty(NULL, false);
+                
+                // +5 is needed because HTTP/1.1 is 5 chars longer than ICY
+                UInt8 *headerCopyBuffer = malloc(sizeof(UInt8) * (httpConnectionBufferSize + 5));
+                
+                // append the correct HTTP status line
+                memcpy(headerCopyBuffer, http, strlen(http));
+                
+                // append the rest of the SHOUTcast quasi-HTTP response for processing (content-type, etc)
+                memcpy(headerCopyBuffer + (sizeof(UInt8) * strlen(http)), httpReadBuffer + (sizeof(UInt8) * icy200OkLength), bytesRead - 10);
+                
+                if(!CFHTTPMessageAppendBytes(response, headerCopyBuffer, bytesRead + 5)) {
+                    NSLog(@"failed to append SHOUTcast headers to HTTP response");
+                }
+                
+                // find the postion of the CRLFCRLF so properly track read bytes for metadata purposes
+                // by not including the header in the bytes read
+                for (NSInteger i = 3; i < bytesRead; i++) {
+                    if(httpReadBuffer[i - 3] == '\r' && httpReadBuffer[i - 2] == '\n' &&
+                       httpReadBuffer[i - 1] == '\r' && httpReadBuffer[i - 0] == '\n') {
+                        shoutcastMetadataBytesRead = bytesRead - (i + 1);
+                    }
+                }
+                
+                free(headerCopyBuffer);
+            }
+            
+            free(httpReadBuffer);
+        }
         
         if (response)
         {
@@ -179,6 +240,20 @@ static NSString *userAgent = nil;
 			{
 				audioFileTypeHint = typeIdFromMimeType;
 			}
+            
+            if(self.isShoutCastStream) {
+                NSString *metadataInterval = httpHeaders[@"icy-metaint"];
+                shoutcastMetadataInterval = metadataInterval.integerValue;
+                
+                NSMutableDictionary *dict = NSMutableDictionary.dictionary;
+                for (NSString *key in @[@"notice1", @"notice2", @"name", @"genre", @"url", @"pub", @"br"]) {
+                    dict[key] = httpHeaders[[@"icy-" stringByAppendingString:key]];
+                }
+                
+                [self willChangeValueForKey:@"shoutCastStationMetadata"];
+                _shoutCastStationMetadata = dict;
+                [self didChangeValueForKey:@"shoutCastStationMetadata"];
+            }
 		}
 		else if (self.httpStatusCode == 206)
 		{
@@ -259,7 +334,65 @@ static NSString *userAgent = nil;
         return 0;
     }
     
-    int read = (int)CFReadStreamRead(stream, buffer, size);
+    int read = 0;
+    if(!self.isShoutCastStream) {
+        read = (int)CFReadStreamRead(stream, buffer, size);
+    }
+    else {
+        UInt8 *swap = malloc(sizeof(UInt8) * size);
+        read = (int)CFReadStreamRead(stream, swap, size);
+        
+        if (read < 0)
+        {
+            return read;
+        }
+
+        if(metadataHeader == NULL) {
+            metadataHeader = malloc(sizeof(char) * 1024);
+        }
+        
+        NSInteger bufferIndex = 0;
+        for(int i = 0; i < read; i++) {
+            if(metadataLength != 0) {
+                metadataHeader[metadataHeaderIndex++] = swap[i];
+                metadataLength--;
+                
+                if(metadataLength == 0) {
+                    metadataHeader[metadataHeaderIndex++] = '\0';
+                    metadataHeaderIndex = 0;
+                    
+                    NSString *meta = [NSString stringWithUTF8String:metadataHeader];
+                    NSString *title = @"";
+                    
+                    NSArray *comps = [meta componentsSeparatedByString:@";"];
+                    for (NSString *comp in comps) {
+                        NSArray *subcomps = [comp componentsSeparatedByString:@"="];
+                        if (subcomps.count >= 2 && [subcomps[0] isEqualToString:@"StreamTitle"]) {
+                            title = [subcomps[1] substringWithRange:NSMakeRange(1, [subcomps[1] length] - 2)];
+                            break;
+                        }
+                    }
+                    
+                    if (title != nil) {
+                        [self willChangeValueForKey:@"shoutCastSongMetadata"];
+                        _shoutCastSongMetadata = @{kSTKShoutcastSongMetadataTitleKey: title};
+                        [self didChangeValueForKey:@"shoutCastSongMetadata"];
+                    }
+                }
+            }
+            else {
+                if(shoutcastMetadataBytesRead++ < shoutcastMetadataInterval) {
+                    buffer[bufferIndex++] = swap[i];
+                }
+                else {
+                    metadataLength = swap[i] * 16;
+                    shoutcastMetadataBytesRead = 0;
+                }
+            }
+        }
+        
+        read = bufferIndex;
+    }
     
     if (read < 0)
     {
@@ -298,11 +431,14 @@ static NSString *userAgent = nil;
         }
 
         CFHTTPMessageRef message = CFHTTPMessageCreateRequest(NULL, (CFStringRef)@"GET", (__bridge CFURLRef)self->currentUrl, kCFHTTPVersion1_1);
-		
+        
+        // Make sure no metadata is sent to screw up the stream
+        CFHTTPMessageSetHeaderFieldValue(message, CFSTR("Icy-MetaData"), CFSTR("1"));
+				
 		if(userAgent) {
 			CFHTTPMessageSetHeaderFieldValue(message, CFSTR("User-Agent"), (__bridge CFStringRef)userAgent);
 		}
-		
+        
         if (seekStart > 0)
         {
             CFHTTPMessageSetHeaderFieldValue(message, CFSTR("Range"), (__bridge CFStringRef)[NSString stringWithFormat:@"bytes=%lld-", seekStart]);
@@ -311,7 +447,7 @@ static NSString *userAgent = nil;
         }
 
         stream = CFReadStreamCreateForHTTPRequest(NULL, message);
-
+        
         if (stream == nil)
         {
             CFRelease(message);

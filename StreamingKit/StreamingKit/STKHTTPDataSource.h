@@ -34,6 +34,16 @@
 
 #import "STKCoreFoundationDataSource.h"
 
+static const NSString *kSTKShoutcastStationMetadataNotice1Key = @"notice1";
+static const NSString *kSTKShoutcastStationMetadataNotice2Key = @"notice2";
+static const NSString *kSTKShoutcastStationMetadataNameKey = @"name";
+static const NSString *kSTKShoutcastStationMetadataGenreKey = @"genre";
+static const NSString *kSTKShoutcastStationMetadataUrlKey = @"url";
+static const NSString *kSTKShoutcastStationMetadataPubKey = @"pub";
+static const NSString *kSTKShoutcastStationMetadataBitRateKey = @"br";
+
+static const NSString *kSTKShoutcastSongMetadataTitleKey = @"StreamTitle";
+
 @class STKHTTPDataSource;
 
 typedef void(^STKURLBlock)(NSURL* url);
@@ -46,6 +56,10 @@ typedef void(^STKAsyncURLProvider)(STKHTTPDataSource* dataSource, BOOL forSeek, 
 
 @property (readonly, retain) NSURL* url;
 @property (readonly) UInt32 httpStatusCode;
+
+@property (readonly) BOOL isShoutCastStream;
+@property (readonly) NSDictionary *shoutCastStationMetadata;
+@property (readonly) NSDictionary *shoutCastSongMetadata;
 
 +(AudioFileTypeID) audioFileTypeHintFromMimeType:(NSString*)fileExtension;
 -(id) initWithURL:(NSURL*)url;

@@ -1040,6 +1040,10 @@ static void AudioFileStreamPacketsProc(void* clientData, UInt32 numberBytes, UIn
     OSSpinLockUnlock(&seekLock);
 }
 
+- (STKDataSource *)currentlyPlayingDataSource {
+    return currentlyPlayingEntry;
+}
+
 -(void) createPlaybackThread
 {
     playbackThread = [[NSThread alloc] initWithTarget:self selector:@selector(startInternal) object:nil];

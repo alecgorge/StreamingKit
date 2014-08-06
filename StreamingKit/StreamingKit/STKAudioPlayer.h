@@ -242,6 +242,8 @@ typedef void(^STKFrameFilter)(UInt32 channelsPerFrame, UInt32 bytesPerFrame, UIn
 /// The QueueItemId of the currently playing item
 -(NSObject*) currentlyPlayingQueueItemId;
 
+-(STKDataSource *) currentlyPlayingDataSource;
+
 /// Removes a frame filter with the given name
 -(void) removeFrameFilterWithName:(NSString*)name;
 
